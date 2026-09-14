@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Overscroll</string>
+
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_description">Overscroll monitors Instagram Reels scrolling to count how many Reels you watch. It only observes scroll events within Instagram and does not read, store, or transmit any content.</string>
+
+    <!-- Notification channels -->
+    <string name="notification_channel_counter">Reels Counter</string>
+    <string name="notification_channel_counter_desc">Shows your live Reels scroll count</string>
+    <string name="notification_channel_alerts">Service Alerts</string>
+    <string name="notification_channel_alerts_desc">Alerts when the accessibility service needs attention</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_title">Welcome to Overscroll</string>
+    <string name="onboarding_subtitle">See how many Reels you actually scroll through.</string>
+    <string name="onboarding_permissions_title">Permissions Needed</string>
+    <string name="onboarding_permissions_subtitle">Overscroll needs a few permissions to count your Reels. All data stays on your device.</string>
+
+    <string name="permission_accessibility_title">Accessibility Service</string>
+    <string name="permission_accessibility_desc">Detects when you scroll through Reels in Instagram. Only monitors Instagram — no other apps.</string>
+    <string name="permission_overlay_title">Display Over Other Apps</string>
+    <string name="permission_overlay_desc">Shows a floating counter bubble on top of Instagram so you can see your count in real time.</string>
+    <string name="permission_notification_title">Notifications</string>
+    <string name="permission_notification_desc">Shows your live Reels count in the status bar notification.</string>
+
+    <string name="permission_granted">Granted</string>
+    <string name="permission_not_granted">Not Granted</string>
+    <string name="permission_grant_button">Grant Permission</string>
+    <string name="permission_continue">Continue</string>
+
+    <!-- Home -->
+    <string name="home_today_count_label">Reels Today</string>
+    <string name="home_service_active">Monitoring active</string>
+    <string name="home_service_inactive">Monitoring inactive</string>
+
+    <!-- History -->
+    <string name="history_title">History</string>
+    <string name="history_7_days">7 Days</string>
+    <string name="history_30_days">30 Days</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_overlay_toggle">Floating bubble</string>
+    <string name="settings_notification_toggle">Status bar notification</string>
+    <string name="settings_reset_today">Reset today\'s count</string>
+    <string name="settings_reset_all">Reset all history</string>
+    <string name="settings_daily_reset_time">Daily auto-reset time</string>
+    <string name="settings_reset_confirm_title">Are you sure?</string>
+    <string name="settings_reset_today_confirm">This will reset today\'s Reels count to zero.</string>
+    <string name="settings_reset_all_confirm">This will permanently delete all your Reels history.</string>
+
+    <!-- Known limitations (PRD §5.2) -->
+    <string name="limitations_title">Known Limitations</string>
+    <string name="limitations_body">Scroll-event counting is a heuristic. Fast swipes, replays, and pre-loaded content may cause slight over- or under-counting. This is expected and documented, not a bug.</string>
+</resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    AccessibilityService configuration for Reels scroll detection.
+    Scoped ONLY to com.instagram.android (PRD §5.2).
+
+    Event types:
+    - typeViewScrolled: fires on ViewPager page changes (primary signal)
+    - typeWindowContentChanged: fires on content reloads (secondary signal)
+    - typeWindowStateChanged: fires on activity/fragment transitions
+
+    flagReportViewIds: required to read resource-ids from AccessibilityNodeInfo
+    canRetrieveWindowContent: required to traverse the view hierarchy
+
+    notificationTimeout: 100ms — minimum interval between event deliveries to reduce spam
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewScrolled|typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.overscroll.app.MainActivity" />

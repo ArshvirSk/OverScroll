@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Downward scroll arrows — representing Reels scrolling -->
+    <!-- Top arrow -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,32 L38,48 L47,48 L47,56 L61,56 L61,48 L70,48 Z" />
+    <!-- Bottom arrow (offset, slightly transparent for depth) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:alpha="0.55"
+        android:pathData="M54,48 L38,64 L47,64 L47,72 L61,72 L61,64 L70,64 Z" />
+</vector>
