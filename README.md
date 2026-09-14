@@ -29,13 +29,10 @@ The app works entirely offline—zero data ever leaves your device.
 
 Since Overscroll relies on system-level Accessibility and Overlay permissions, it's designed to be sideloaded.
 
-### 1. Build and Install the APK
-You can install the app directly via Android Studio or by building the APK manually:
-1. Clone this repository to your local machine.
-2. Open the project in **Android Studio**.
-3. Connect your Android phone via USB (or wireless debugging).
-4. Click the **Run** button (or build the APK via `Build > Build Bundle(s) / APK(s) > Build APK(s)` and transfer it to your phone).
-
+### 1. Download and Install the APK
+1. Go to the [Releases](../../releases) page of this repository.
+2. Download the latest `app-release.apk` directly to your Android device.
+3. Tap on the downloaded file to install it. (You may need to allow your browser or file manager to "Install unknown apps").
 ### 2. Grant Required Permissions
 
 Once installed, Overscroll requires two critical permissions to function. The app will prompt you for these on the home screen.
@@ -79,32 +76,7 @@ Some manufacturers aggressively kill background apps. If the mascot disappears o
 ## Privacy Note
 Overscroll does not request the `INTERNET` permission in its AndroidManifest. It is physically impossible for the app to send your data anywhere. Your scroll history is yours alone.
 
----
 
-## Building a Release APK
-
-If you want to create a signed release APK (for sharing or sideloading without a debug cable):
-
-1. **Generate a Keystore (if you don't have one):**
-   - In Android Studio, go to `Build > Generate Signed Bundle / APK...`
-   - Select **APK** and click Next.
-   - Under Key store path, click **Create new...** and follow the prompts to create a `.jks` keystore file. Keep your passwords safe.
-
-2. **Build the Signed APK:**
-   - Go to `Build > Generate Signed Bundle / APK...`
-   - Select **APK**.
-   - Choose your Keystore and enter the passwords.
-   - Select the `release` build variant.
-   - Click **Create**. 
-
-3. **Locate the APK:**
-   - Once the build finishes, Android Studio will show a popup in the bottom right corner. Click **locate** to open the folder containing `app-release.apk`.
-   - You can then transfer this APK to your phone via USB, Google Drive, or email to install it.
-
-4. **GitHub Releases:**
-   - You can upload this `app-release.apk` directly to the "Releases" section of your GitHub repository so others can download and install it easily.
-
----
 
 ## License
 
