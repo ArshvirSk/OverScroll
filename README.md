@@ -78,3 +78,34 @@ Some manufacturers aggressively kill background apps. If the mascot disappears o
 
 ## Privacy Note
 Overscroll does not request the `INTERNET` permission in its AndroidManifest. It is physically impossible for the app to send your data anywhere. Your scroll history is yours alone.
+
+---
+
+## Building a Release APK
+
+If you want to create a signed release APK (for sharing or sideloading without a debug cable):
+
+1. **Generate a Keystore (if you don't have one):**
+   - In Android Studio, go to `Build > Generate Signed Bundle / APK...`
+   - Select **APK** and click Next.
+   - Under Key store path, click **Create new...** and follow the prompts to create a `.jks` keystore file. Keep your passwords safe.
+
+2. **Build the Signed APK:**
+   - Go to `Build > Generate Signed Bundle / APK...`
+   - Select **APK**.
+   - Choose your Keystore and enter the passwords.
+   - Select the `release` build variant.
+   - Click **Create**. 
+
+3. **Locate the APK:**
+   - Once the build finishes, Android Studio will show a popup in the bottom right corner. Click **locate** to open the folder containing `app-release.apk`.
+   - You can then transfer this APK to your phone via USB, Google Drive, or email to install it.
+
+4. **GitHub Releases:**
+   - You can upload this `app-release.apk` directly to the "Releases" section of your GitHub repository so others can download and install it easily.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
