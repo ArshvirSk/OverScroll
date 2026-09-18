@@ -236,13 +236,32 @@ class OverlayBubbleService : LifecycleService() {
 
     private fun observeInstagramActive() {
         lifecycleScope.launch {
+            var hideJob: kotlinx.coroutines.Job? = null
             scrollCountRepository.isAnyAppActive.collect { isActive ->
                 if (rootView != null && layoutParams != null && rootView?.isAttachedToWindow == true) {
-                    rootView?.visibility = if (isActive) View.VISIBLE else View.GONE
-                    try {
-                        windowManager.updateViewLayout(rootView, layoutParams)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to update view layout on visibility change", e)
+                    if (isActive) {
+                        hideJob?.cancel()
+                        if (rootView?.visibility != View.VISIBLE) {
+                            rootView?.visibility = View.VISIBLE
+                            try {
+                                windowManager.updateViewLayout(rootView, layoutParams)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to update view layout on visibility change", e)
+                            }
+                        }
+                    } else {
+                        hideJob?.cancel()
+                        hideJob = launch {
+                            kotlinx.coroutines.delay(400) // Debounce hiding to prevent flickering during app transitions
+                            if (rootView?.visibility != View.GONE) {
+                                rootView?.visibility = View.GONE
+                                try {
+                                    windowManager.updateViewLayout(rootView, layoutParams)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to update view layout on visibility change", e)
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -157,10 +157,13 @@ class ReelsAccessibilityService : AccessibilityService() {
 
             // Check if this scroll is from the known feed container
             val isFeedScroll = if (trackedApp.feedResourceIds.isEmpty()) {
-                // Since the user wants to track both reels AND normal feed scrolling,
-                // and modern apps use various unknown classes (Compose, custom views),
-                // we accept any valid scroll event here if we don't have hardcoded IDs.
-                true
+                // Heuristic for feed/list detection without hardcoded IDs
+                val scrollClassName = event.className?.toString() ?: ""
+                val isKnownList = scrollClassName.contains("RecyclerView", ignoreCase = true) || 
+                                  scrollClassName.contains("ViewPager", ignoreCase = true) ||
+                                  scrollClassName.contains("ListView", ignoreCase = true)
+                // A valid feed is usually a known list class or a component with multiple items
+                isKnownList || (event.itemCount > 0)
             } else {
                 trackedApp.feedResourceIds.contains(resourceId)
             }
