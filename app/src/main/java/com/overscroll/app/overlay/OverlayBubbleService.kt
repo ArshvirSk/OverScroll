@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -72,6 +73,8 @@ class OverlayBubbleService : LifecycleService() {
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var hasMoved = false
+    
+    private val isExpanded = kotlinx.coroutines.flow.MutableStateFlow(false)
 
     companion object {
         private const val TAG = "OverlayBubble"
@@ -144,35 +147,63 @@ class OverlayBubbleService : LifecycleService() {
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
             
             setContent {
-                val count by scrollCountRepository.todayCount.collectAsState()
+                val count by scrollCountRepository.combinedTodayCount.collectAsState(initial = 0)
+                val countsMap by scrollCountRepository.todayCounts.collectAsState(initial = emptyMap())
                 val thresholdA by appSettingsDataStore.thresholdA.collectAsState(initial = 20)
                 val thresholdB by appSettingsDataStore.thresholdB.collectAsState(initial = 50)
+                val expanded by isExpanded.collectAsState()
                 
                 // Root padding prevents clipping of scaling animations
                 Box(
                     modifier = Modifier.padding(16.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .background(
-                                color = Color(0xE6181824),
-                                shape = RoundedCornerShape(32.dp)
+                    androidx.compose.foundation.layout.Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .background(
+                                    color = Color(0xE6181824),
+                                    shape = RoundedCornerShape(32.dp)
+                                )
+                                .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 16.dp)
+                        ) {
+                            MascotFace(
+                                count = count,
+                                thresholdA = thresholdA,
+                                thresholdB = thresholdB
                             )
-                            .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 16.dp)
-                    ) {
-                        MascotFace(
-                            count = count,
-                            thresholdA = thresholdA,
-                            thresholdB = thresholdB
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = count.toString(),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = count.toString(),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        
+                        androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+                            androidx.compose.foundation.layout.Column(
+                                modifier = Modifier
+                                    .padding(top = 8.dp)
+                                    .background(Color(0xE6181824), RoundedCornerShape(16.dp))
+                                    .padding(12.dp)
+                            ) {
+                                val activeApps = com.overscroll.app.config.AppTrackerConfig.SUPPORTED_APPS.filter { (countsMap[it.packageName] ?: 0) > 0 }
+                                if (activeApps.isEmpty()) {
+                                    Text("No tracking data yet", color = Color.White, fontSize = 14.sp)
+                                } else {
+                                    activeApps.forEach { app ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                                        ) {
+                                            Text(app.displayName, color = Color.White, fontSize = 14.sp)
+                                            Text(countsMap[app.packageName].toString(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(start = 12.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -228,7 +259,7 @@ class OverlayBubbleService : LifecycleService() {
 
     private fun observeInstagramActive() {
         lifecycleScope.launch {
-            scrollCountRepository.isInstagramActive.collect { isActive ->
+            scrollCountRepository.isAnyAppActive.collect { isActive ->
                 if (rootView != null && layoutParams != null && rootView?.isAttachedToWindow == true) {
                     rootView?.visibility = if (isActive) View.VISIBLE else View.GONE
                     try {
@@ -284,7 +315,8 @@ class OverlayBubbleService : LifecycleService() {
                         // Snap to nearest edge after drag
                         snapToEdge(params)
                     } else {
-                        // Tap behavior: nothing for now in v1.2. The Compose UI handles micro-animations automatically.
+                        // Tap behavior: Toggle expanded state
+                        isExpanded.value = !isExpanded.value
                     }
                     true
                 }

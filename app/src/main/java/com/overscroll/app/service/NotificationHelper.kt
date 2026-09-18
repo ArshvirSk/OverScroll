@@ -95,14 +95,25 @@ object NotificationHelper {
      * Live count notification for the foreground counter service.
      * Updated frequently as the count changes.
      */
-    fun createCounterNotification(context: Context, count: Int): Notification {
+    fun createCounterNotification(context: Context, counts: Map<String, Int>): Notification {
         val pendingIntent = createMainActivityPendingIntent(context)
-        val icon = createCountIcon(context, count)
+        val combinedCount = counts.values.sum()
+        val icon = createCountIcon(context, combinedCount)
+
+        val activeApps = counts.filterValues { it > 0 }.map { (pkg, _) ->
+            com.overscroll.app.config.AppTrackerConfig.SUPPORTED_APPS.find { it.packageName == pkg }?.displayName ?: "App"
+        }.joinToString(", ")
+
+        val contentText = if (activeApps.isEmpty()) {
+            "Overscroll is monitoring"
+        } else {
+            "Active: $activeApps"
+        }
 
         return NotificationCompat.Builder(context, CHANNEL_COUNTER)
             .setSmallIcon(icon)
-            .setContentTitle("$count Reels today")
-            .setContentText("Overscroll is monitoring Instagram")
+            .setContentTitle("$combinedCount Shorts/Reels today")
+            .setContentText(contentText)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

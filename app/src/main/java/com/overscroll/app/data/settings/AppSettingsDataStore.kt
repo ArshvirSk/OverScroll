@@ -36,6 +36,13 @@ class AppSettingsDataStore @Inject constructor(
         private val KEY_SNOOZED_TODAY = booleanPreferencesKey("snoozed_today")
         private val KEY_NUDGED_A_TODAY = booleanPreferencesKey("nudged_a_today")
         private val KEY_NUDGED_B_TODAY = booleanPreferencesKey("nudged_b_today")
+        
+        // v2 Tracked Apps
+        private val KEY_TRACKED_APPS = androidx.datastore.preferences.core.stringSetPreferencesKey("tracked_apps")
+    }
+
+    val trackedApps: Flow<Set<String>> = context.appSettingsDataStore.data.map { prefs ->
+        prefs[KEY_TRACKED_APPS] ?: setOf("com.instagram.android") // Default to IG only for backwards compat
     }
 
     val overlayEnabled: Flow<Boolean> = context.appSettingsDataStore.data.map { prefs ->
@@ -68,6 +75,24 @@ class AppSettingsDataStore @Inject constructor(
 
     val nudgedBToday: Flow<Boolean> = context.appSettingsDataStore.data.map { prefs ->
         prefs[KEY_NUDGED_B_TODAY] ?: false
+    }
+
+    suspend fun setTrackedApps(apps: Set<String>) {
+        context.appSettingsDataStore.edit { prefs ->
+            prefs[KEY_TRACKED_APPS] = apps
+        }
+    }
+
+    suspend fun toggleTrackedApp(packageName: String, enabled: Boolean) {
+        context.appSettingsDataStore.edit { prefs ->
+            val current = prefs[KEY_TRACKED_APPS]?.toMutableSet() ?: mutableSetOf("com.instagram.android")
+            if (enabled) {
+                current.add(packageName)
+            } else {
+                current.remove(packageName)
+            }
+            prefs[KEY_TRACKED_APPS] = current
+        }
     }
 
     suspend fun setOverlayEnabled(enabled: Boolean) {

@@ -43,8 +43,7 @@ class CounterForegroundService : LifecycleService() {
     }
 
     private fun startAsForeground() {
-        val initialCount = scrollCountRepository.todayCount.value
-        val notification = NotificationHelper.createCounterNotification(this, initialCount)
+        val notification = NotificationHelper.createCounterNotification(this, emptyMap())
         
         ServiceCompat.startForeground(
             this,
@@ -60,14 +59,14 @@ class CounterForegroundService : LifecycleService() {
 
     private fun observeCount() {
         lifecycleScope.launch {
-            scrollCountRepository.todayCount.collect { count ->
-                updateNotification(count)
+            scrollCountRepository.todayCounts.collect { countsMap ->
+                updateNotification(countsMap)
             }
         }
     }
 
-    private fun updateNotification(count: Int) {
-        val notification = NotificationHelper.createCounterNotification(this, count)
+    private fun updateNotification(countsMap: Map<String, Int>) {
+        val notification = NotificationHelper.createCounterNotification(this, countsMap)
         notificationManager.notify(NotificationHelper.NOTIFICATION_ID_COUNTER, notification)
     }
 

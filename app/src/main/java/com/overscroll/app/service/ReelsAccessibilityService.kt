@@ -1,34 +1,18 @@
 package com.overscroll.app.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.overscroll.app.config.InstagramConfig
+import com.overscroll.app.config.AppTrackerConfig
+import com.overscroll.app.config.TrackedApp
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Accessibility service scoped to com.instagram.android for Reels scroll detection.
- * (PRD §5.2)
- *
- * Detection strategy:
- * 1. Listen for TYPE_VIEW_SCROLLED events from Instagram
- * 2. Check if the scroll source's resource-id matches the Reels ViewPager ID
- *    (from InstagramConfig — the single file to update when IG changes their UI)
- * 3. Apply debounce (400ms) to filter fast swipes / view recycler noise
- * 4. Increment the count via ScrollCountRepository
- *
- * All events are logged to Logcat under tag "ReelsA11yService" for debugging.
- * Use `adb logcat -s ReelsA11yService:V` to see all events during development.
- *
- * ⚠️ This service is system-managed — it CANNOT use Hilt @AndroidEntryPoint.
- * Instead, it accesses dependencies via ReelsAccessibilityEntryPoint.
- *
- * See: res/xml/accessibility_service_config.xml for the XML configuration.
- * See: config/InstagramConfig.kt for the resource IDs being matched.
- * See: skills/accessibility-service.md for the full skill reference.
+ * Accessibility service generalized for short-form video scroll detection.
  */
 class ReelsAccessibilityService : AccessibilityService() {
 
@@ -36,16 +20,18 @@ class ReelsAccessibilityService : AccessibilityService() {
         private const val TAG = "ReelsA11yService"
     }
 
-    /** Timestamp of the last counted scroll, for debouncing */
-    private var lastScrollTimestamp = 0L
+    /** Timestamp of the last counted scroll per package, for debouncing */
+    private val lastScrollTimestamps = mutableMapOf<String, Long>()
 
-    /** Whether we believe the user is currently in the Reels viewer */
-    private var isInReelsViewer = false
+    /** Whether we believe the user is currently in the short-form feed per package */
+    private val isInFeedViewer = mutableMapOf<String, Boolean>()
 
     /** Set of resource IDs we've seen but didn't match — logged for ID discovery */
-    private val unknownScrollSources = mutableSetOf<String>()
+    private val unknownScrollSources = mutableMapOf<String, MutableSet<String>>()
 
-    /** Hilt dependency — lazily initialized via EntryPoint */
+    /** Enabled packages */
+    private var trackedPackages = setOf<String>()
+
     private val repository: ScrollCountRepository by lazy {
         EntryPointAccessors.fromApplication(
             applicationContext,
@@ -74,10 +60,6 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "✅ Accessibility service connected")
-        Log.i(TAG, "Monitoring: ${InstagramConfig.PACKAGE_NAME}")
-        Log.i(TAG, "Primary Reels ID: ${InstagramConfig.REELS_VIEW_PAGER_ID}")
-        Log.i(TAG, "Fallback IDs: ${InstagramConfig.REELS_FALLBACK_IDS}")
-        Log.i(TAG, "Debounce: ${InstagramConfig.SCROLL_DEBOUNCE_MS}ms")
 
         serviceScope.launch { appSettings.thresholdA.collect { currentThresholdA = it } }
         serviceScope.launch { appSettings.thresholdB.collect { currentThresholdB = it } }
@@ -85,6 +67,31 @@ class ReelsAccessibilityService : AccessibilityService() {
         serviceScope.launch { appSettings.snoozedToday.collect { hasSnoozedToday = it } }
         serviceScope.launch { appSettings.nudgedAToday.collect { nudgedAToday = it } }
         serviceScope.launch { appSettings.nudgedBToday.collect { nudgedBToday = it } }
+        
+        serviceScope.launch { 
+            appSettings.trackedApps.collect { apps ->
+                trackedPackages = apps
+                updateServiceInfoPackages()
+                Log.i(TAG, "Monitoring packages: $trackedPackages")
+            }
+        }
+    }
+
+    private fun updateServiceInfoPackages() {
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        if (trackedPackages.isNotEmpty()) {
+            info.packageNames = trackedPackages.toTypedArray()
+        } else {
+            // If none tracked, track a dummy package so we don't intercept everything
+            info.packageNames = arrayOf("com.overscroll.dummy")
+        }
+        
+        // Ensure other flags are kept
+        info.eventTypes = AccessibilityEvent.TYPE_VIEW_SCROLLED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        info.notificationTimeout = 100
+        serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -92,142 +99,122 @@ class ReelsAccessibilityService : AccessibilityService() {
         
         val packageName = event.packageName?.toString() ?: ""
         
-        // Robustly track whether Instagram (or our app) is active
+        // Robustly track whether a tracked app (or our app) is active
         if (packageName.isNotEmpty() && !packageName.startsWith("com.android.systemui") && !packageName.contains("inputmethod")) {
-            val isIgActive = packageName == InstagramConfig.PACKAGE_NAME || packageName == "com.overscroll.app"
-            repository.setInstagramActive(isIgActive)
+            val isTrackedActive = trackedPackages.contains(packageName) || packageName == "com.overscroll.app"
+            // For v2 we just set the primary active state. We'll use the last known package if needed.
+            repository.setAppActive(packageName, isTrackedActive)
         }
 
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            handleWindowStateChanged(event)
-        }
-
-        // For all other event types, strictly filter to Instagram only
-        if (packageName != InstagramConfig.PACKAGE_NAME) return
+        if (!trackedPackages.contains(packageName)) return
+        val trackedApp = AppTrackerConfig.getAppByPackage(packageName) ?: return
 
         when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                handleWindowStateChanged(event, trackedApp)
+            }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                handleViewScrolled(event)
+                handleViewScrolled(event, trackedApp)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                handleContentChanged(event)
+                handleContentChanged(event, trackedApp)
             }
         }
     }
 
-    /**
-     * Track whether the user is in the Reels viewer surface.
-     * Uses class name matching against known Reels fragment/activity names.
-     * This is a secondary signal — resource-id matching in handleViewScrolled
-     * is the primary detection mechanism.
-     */
-    private fun handleWindowStateChanged(event: AccessibilityEvent) {
+    private fun handleWindowStateChanged(event: AccessibilityEvent, trackedApp: TrackedApp) {
         val className = event.className?.toString() ?: return
-        val wasInReels = isInReelsViewer
+        val wasInFeed = isInFeedViewer[trackedApp.packageName] ?: false
 
-        isInReelsViewer = InstagramConfig.REELS_ACTIVITY_CLASS_NAMES.any { knownName ->
-            className.contains(knownName, ignoreCase = true)
+        val nowInFeed = if (trackedApp.classNames.isEmpty()) {
+            true // If no classNames known, assume we might be in feed
+        } else {
+            trackedApp.classNames.any { knownName -> className.contains(knownName, ignoreCase = true) }
         }
 
-        if (isInReelsViewer != wasInReels) {
-            if (isInReelsViewer) {
-                Log.i(TAG, "📱 Entered Reels viewer (class: $className)")
+        isInFeedViewer[trackedApp.packageName] = nowInFeed
+
+        if (nowInFeed != wasInFeed) {
+            if (nowInFeed) {
+                Log.i(TAG, "📱 Entered ${trackedApp.displayName} viewer (class: $className)")
             } else {
-                Log.i(TAG, "📱 Left Reels viewer (class: $className)")
+                Log.i(TAG, "📱 Left ${trackedApp.displayName} viewer (class: $className)")
             }
         }
     }
 
-    /**
-     * Primary detection: handle scroll events from the Reels ViewPager.
-     *
-     * Workflow:
-     * 1. Get the source node's resource-id
-     * 2. Match against InstagramConfig.REELS_VIEW_PAGER_ID (and fallbacks)
-     * 3. Apply debounce window
-     * 4. If matched + debounce passed → count it
-     */
-    private fun handleViewScrolled(event: AccessibilityEvent) {
+    private fun handleViewScrolled(event: AccessibilityEvent, trackedApp: TrackedApp) {
         var sourceNode: AccessibilityNodeInfo? = null
         try {
             sourceNode = event.source
             val resourceId = sourceNode?.viewIdResourceName
 
             if (resourceId == null) {
-                // Source node unavailable or has no resource ID — can't match
-                Log.v(TAG, "Scroll event with no resource ID (class: ${event.className})")
                 return
             }
 
-            // Check if this scroll is from the Reels ViewPager
-            val isReelsScroll = resourceId == InstagramConfig.REELS_VIEW_PAGER_ID ||
-                resourceId in InstagramConfig.REELS_FALLBACK_IDS
+            // Check if this scroll is from the known feed container
+            val isFeedScroll = if (trackedApp.feedResourceIds.isEmpty()) {
+                // Fallback: accept if it's a known scrollable class
+                val scrollClassName = event.className?.toString() ?: ""
+                scrollClassName.contains("RecyclerView", ignoreCase = true) || scrollClassName.contains("ViewPager", ignoreCase = true)
+            } else {
+                trackedApp.feedResourceIds.contains(resourceId)
+            }
 
-            if (!isReelsScroll) {
-                // Log unknown scroll sources for resource-id discovery.
-                // This helps when Instagram updates change the ViewPager ID —
-                // run the app, scroll through Reels, and check Logcat for these logs.
-                if (unknownScrollSources.add(resourceId)) {
-                    Log.d(
-                        TAG,
-                        "🔍 Scroll from unrecognized view: $resourceId " +
-                            "(class: ${event.className}). " +
-                            "If this is the Reels ViewPager, update InstagramConfig.kt"
-                    )
+            if (!isFeedScroll) {
+                val unknownSet = unknownScrollSources.getOrPut(trackedApp.packageName) { mutableSetOf() }
+                if (unknownSet.add(resourceId)) {
+                    Log.d(TAG, "🔍 ${trackedApp.displayName}: Scroll from unrecognized view: $resourceId (class: ${event.className})")
                 }
                 return
             }
 
-            // ── Reels scroll detected — apply debounce ──
+            // ── Scroll detected — apply debounce ──
             val now = System.currentTimeMillis()
-            val elapsed = now - lastScrollTimestamp
+            val lastTimestamp = lastScrollTimestamps[trackedApp.packageName] ?: 0L
+            val elapsed = now - lastTimestamp
 
-            if (elapsed < InstagramConfig.SCROLL_DEBOUNCE_MS) {
-                Log.v(TAG, "Scroll debounced (${elapsed}ms < ${InstagramConfig.SCROLL_DEBOUNCE_MS}ms)")
+            if (elapsed < AppTrackerConfig.SCROLL_DEBOUNCE_MS) {
+                Log.v(TAG, "${trackedApp.displayName}: Scroll debounced (${elapsed}ms < ${AppTrackerConfig.SCROLL_DEBOUNCE_MS}ms)")
                 return
             }
 
-            lastScrollTimestamp = now
+            lastScrollTimestamps[trackedApp.packageName] = now
 
             // ── Count it! ──
-            repository.increment()
-            val count = repository.todayCount.value
-            Log.i(TAG, "🎬 Reel #$count counted! (from: $resourceId, elapsed: ${elapsed}ms)")
+            repository.increment(trackedApp.packageName)
+            // Wait for flow to emit, but we can optimistically sum the state flow
+            val combinedCount = repository.todayCounts.value.values.sum() + 1 // +1 for the increment just dispatched
+            Log.i(TAG, "🎬 ${trackedApp.displayName} counted! (from: $resourceId, elapsed: ${elapsed}ms)")
 
-            // ── Check Nudges ──
+            // ── Check Nudges (apply to combined count) ──
             if (isNudgeEnabled && !hasSnoozedToday) {
                 serviceScope.launch {
-                    if (count >= currentThresholdA && count < currentThresholdB && !nudgedAToday) {
+                    if (combinedCount >= currentThresholdA && combinedCount < currentThresholdB && !nudgedAToday) {
                         appSettings.setNudgedAToday(true)
-                        NotificationHelper.sendNudgeNotification(this@ReelsAccessibilityService, "You've scrolled $count Reels today. Maybe take a quick breather?")
-                    } else if (count >= currentThresholdB && !nudgedBToday) {
+                        NotificationHelper.sendNudgeNotification(this@ReelsAccessibilityService, "You've scrolled $combinedCount videos today. Maybe take a quick breather?")
+                    } else if (combinedCount >= currentThresholdB && !nudgedBToday) {
                         appSettings.setNudgedBToday(true)
-                        NotificationHelper.sendNudgeNotification(this@ReelsAccessibilityService, "You've hit $count Reels today. Consider closing the app.")
+                        NotificationHelper.sendNudgeNotification(this@ReelsAccessibilityService, "You've hit $combinedCount videos today. Consider closing the app.")
                     }
                 }
             }
 
         } finally {
-            // On API 26+ (our minSdk), AccessibilityNodeInfo recycling is automatic.
-            // No manual recycle() needed.
+            // Recycling is automatic on modern Android.
         }
     }
 
-    /**
-     * Secondary signal: content changes in the Reels viewer.
-     * Currently used only for debug logging. Could be used in the future
-     * to improve detection accuracy (e.g., confirming a new Reel loaded).
-     */
-    private fun handleContentChanged(event: AccessibilityEvent) {
-        if (!isInReelsViewer) return
+    private fun handleContentChanged(event: AccessibilityEvent, trackedApp: TrackedApp) {
+        val inFeed = isInFeedViewer[trackedApp.packageName] ?: false
+        if (!inFeed) return
 
-        // Only log at VERBOSE level to avoid spam
         val source = event.source
         val resourceId = source?.viewIdResourceName
-        // On API 26+, recycling is automatic — no manual recycle() needed.
 
         if (resourceId != null) {
-            Log.v(TAG, "Content changed in Reels: $resourceId")
+            Log.v(TAG, "Content changed in ${trackedApp.displayName}: $resourceId")
         }
     }
 
@@ -238,15 +225,12 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "❌ Accessibility service destroyed")
-        Log.i(TAG, "Final count for this session: ${repository.todayCount.value}")
+        Log.i(TAG, "Final combined count for this session: ${repository.todayCounts.value.values.sum()}")
 
-        // Log all unknown scroll sources seen during this session
-        if (unknownScrollSources.isNotEmpty()) {
-            Log.i(
-                TAG,
-                "📋 Unrecognized scroll sources seen this session " +
-                    "(check if any are the Reels ViewPager): $unknownScrollSources"
-            )
+        unknownScrollSources.forEach { (pkg, ids) ->
+            if (ids.isNotEmpty()) {
+                Log.i(TAG, "📋 Unrecognized scroll sources for $pkg: $ids")
+            }
         }
         serviceScope.cancel()
     }

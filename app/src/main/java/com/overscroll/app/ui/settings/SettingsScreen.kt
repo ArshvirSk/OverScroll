@@ -80,6 +80,13 @@ class SettingsViewModel @Inject constructor(
     val thresholdB = appSettingsDataStore.thresholdB
     val nudgeEnabled = appSettingsDataStore.nudgeEnabled
     val snoozedToday = appSettingsDataStore.snoozedToday
+    val trackedApps = appSettingsDataStore.trackedApps
+
+    fun toggleTrackedApp(packageName: String, enabled: Boolean) {
+        viewModelScope.launch {
+            appSettingsDataStore.toggleTrackedApp(packageName, enabled)
+        }
+    }
 
     fun setOverlayEnabled(enabled: Boolean) {
         viewModelScope.launch {
@@ -122,7 +129,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun resetTodayCount() {
-        scrollCountRepository.resetToday()
+        scrollCountRepository.resetTodayAll()
     }
 }
 
@@ -187,6 +194,40 @@ fun SettingsScreen(
                 .verticalScroll(scrollState)
         ) {
             Spacer(modifier = Modifier.height(16.dp))
+
+            // -- Tracked Apps Section --
+            Text(
+                text = "TRACKED APPS",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
+            )
+
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                shape = RoundedCornerShape(24.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column {
+                    val currentTrackedApps by viewModel.trackedApps.collectAsState(initial = setOf("com.instagram.android"))
+                    com.overscroll.app.config.AppTrackerConfig.SUPPORTED_APPS.forEach { app ->
+                        SettingToggleRow(
+                            title = app.displayName,
+                            subtitle = if (app.feedResourceIds.isEmpty()) "Needs setup via ADB" else "Monitoring enabled",
+                            checked = currentTrackedApps.contains(app.packageName),
+                            onCheckedChange = { isChecked ->
+                                viewModel.toggleTrackedApp(app.packageName, isChecked)
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
 
             // -- Display Section --
             Text(

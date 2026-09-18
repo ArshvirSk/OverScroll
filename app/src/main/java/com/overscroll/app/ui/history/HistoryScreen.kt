@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -60,39 +62,88 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+
 @HiltViewModel
 class HistoryViewModel @Inject constructor(
-    repository: ScrollCountRepository,
+    private val repository: ScrollCountRepository,
 ) : ViewModel() {
 
-    // Combine historical data with today's live count
-    val chartData = combine(
-        repository.getLast7Days(),
-        repository.todayCount
-    ) { history, todayCount ->
-        val today = LocalDate.now()
-        val data = mutableListOf<DailyCount>()
-        
-        // Ensure we always have 7 days of data points, even if they are 0
-        for (i in 6 downTo 0) {
-            val date = today.minusDays(i.toLong())
-            val dateStr = date.toString()
-            
-            if (i == 0) {
-                // Today
-                data.add(DailyCount(dateStr, todayCount))
-            } else {
-                // Past days from Room
-                val historical = history.find { it.date == dateStr }
-                data.add(DailyCount(dateStr, historical?.count ?: 0))
+    private val _selectedAppFilter = MutableStateFlow<String?>(null) // null = Combined
+    val selectedAppFilter = _selectedAppFilter.asStateFlow()
+
+    fun setAppFilter(packageName: String?) {
+        _selectedAppFilter.value = packageName
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val chartData = _selectedAppFilter.flatMapLatest { filter ->
+        if (filter == null) {
+            combine(
+                repository.getLast7DaysCombined(),
+                repository.combinedTodayCount
+            ) { history, todayCount ->
+                buildChartData(history, todayCount, "combined")
+            }
+        } else {
+            combine(
+                repository.getLast7DaysForPackage(filter),
+                repository.todayCounts
+            ) { history, todayCountsMap ->
+                val todayCount = todayCountsMap[filter] ?: 0
+                buildChartData(history, todayCount, filter)
             }
         }
-        data
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
+
+    private fun buildChartData(
+        history: List<com.overscroll.app.data.history.DailyCountAggregated>,
+        todayCount: Int,
+        packageName: String
+    ): List<DailyCount> {
+        val today = LocalDate.now()
+        val data = mutableListOf<DailyCount>()
+        for (i in 6 downTo 0) {
+            val date = today.minusDays(i.toLong())
+            val dateStr = date.toString()
+            if (i == 0) {
+                data.add(DailyCount(dateStr, packageName, todayCount))
+            } else {
+                val historical = history.find { it.date == dateStr }
+                data.add(DailyCount(dateStr, packageName, historical?.totalCount ?: 0))
+            }
+        }
+        return data
+    }
+    
+    // Overload for regular DailyCount from DB
+    private fun buildChartData(
+        history: List<DailyCount>,
+        todayCount: Int,
+        packageName: String,
+        isAggregated: Boolean = false // dummy to avoid signature clash
+    ): List<DailyCount> {
+        val today = LocalDate.now()
+        val data = mutableListOf<DailyCount>()
+        for (i in 6 downTo 0) {
+            val date = today.minusDays(i.toLong())
+            val dateStr = date.toString()
+            if (i == 0) {
+                data.add(DailyCount(dateStr, packageName, todayCount))
+            } else {
+                val historical = history.find { it.date == dateStr }
+                data.add(DailyCount(dateStr, packageName, historical?.count ?: 0))
+            }
+        }
+        return data
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -148,6 +199,30 @@ fun HistoryScreen(
                 selectedSegment = selectedSegment,
                 onSegmentSelected = { selectedSegment = it }
             )
+            Spacer(Modifier.height(16.dp))
+            
+            // App Filter
+            val selectedAppFilter by viewModel.selectedAppFilter.collectAsState()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AppFilterChip(
+                    label = "Combined",
+                    selected = selectedAppFilter == null,
+                    onClick = { viewModel.setAppFilter(null) }
+                )
+                com.overscroll.app.config.AppTrackerConfig.SUPPORTED_APPS.forEach { app ->
+                    AppFilterChip(
+                        label = app.displayName,
+                        selected = selectedAppFilter == app.packageName,
+                        onClick = { viewModel.setAppFilter(app.packageName) }
+                    )
+                }
+            }
+            
             Spacer(Modifier.height(24.dp))
 
             Card(
@@ -320,6 +395,32 @@ fun StatBox(label: String, value: String, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+@Composable
+fun AppFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary 
+                else MaterialTheme.colorScheme.surfaceVariant
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary 
+                    else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

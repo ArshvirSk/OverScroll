@@ -78,6 +78,7 @@ import javax.inject.Inject
 
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
@@ -85,13 +86,17 @@ import kotlinx.coroutines.flow.stateIn
 class HomeViewModel @Inject constructor(
     private val scrollCountRepository: ScrollCountRepository,
 ) : ViewModel() {
-    val todayCount = scrollCountRepository.todayCount
+    val todayCount: StateFlow<Int> = scrollCountRepository.combinedTodayCount.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0
+    )
 
     val stats = combine(
-        scrollCountRepository.getLast7Days(),
-        scrollCountRepository.todayCount
+        scrollCountRepository.getLast7DaysCombined(),
+        scrollCountRepository.combinedTodayCount
     ) { history, todayCount ->
-        val historyTotal = history.sumOf { it.count }
+        val historyTotal = history.sumOf { it.totalCount }
         val weeklyTotal = historyTotal + todayCount
         
         // Days counted: historical days + today

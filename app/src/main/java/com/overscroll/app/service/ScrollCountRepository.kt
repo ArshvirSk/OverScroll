@@ -1,104 +1,115 @@
 package com.overscroll.app.service
 
+import com.overscroll.app.config.AppTrackerConfig
 import com.overscroll.app.data.history.DailyCount
+import com.overscroll.app.data.history.DailyCountAggregated
 import com.overscroll.app.data.history.DailyCountDao
-import com.overscroll.app.data.settings.CounterDataStore
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Central repository for the Reels scroll count.
- *
- * Architecture:
- * - DataStore (CounterDataStore) is the durable source of truth
- * - StateFlow (_todayCount) is the in-memory snapshot for instant UI updates
- * - On increment: optimistically update StateFlow, then persist to DataStore
- * - On init: load persisted count from DataStore into StateFlow
- *
- * Consumers:
- * - HomeScreen (observes todayCount for the big number display)
- * - OverlayBubbleService (Phase 3: observes for the floating counter)
- * - CounterForegroundService (Phase 4: observes for the notification)
- * - ReelsAccessibilityService (calls increment() on each detected scroll)
- */
 @Singleton
 class ScrollCountRepository @Inject constructor(
-    private val counterDataStore: CounterDataStore,
     private val dailyCountDao: DailyCountDao,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val _todayCount = MutableStateFlow(0)
-    val todayCount: StateFlow<Int> = _todayCount.asStateFlow()
+    // In-memory snapshot of today's counts per package for instant UI updates
+    private val _todayCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val todayCounts: StateFlow<Map<String, Int>> = _todayCounts.asStateFlow()
 
-    private val _isInstagramActive = MutableStateFlow(false)
-    val isInstagramActive: StateFlow<Boolean> = _isInstagramActive.asStateFlow()
+    // Combined total count for today across all apps
+    val combinedTodayCount: Flow<Int> = _todayCounts.map { map -> map.values.sum() }
+
+    private val _isTrackingActive = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val isTrackingActive: StateFlow<Map<String, Boolean>> = _isTrackingActive.asStateFlow()
+
+    // Is any tracked app currently active in the foreground
+    val isAnyAppActive: Flow<Boolean> = _isTrackingActive.map { map -> map.values.any { it } }
 
     init {
-        // Load persisted count from DataStore on startup.
-        // The Flow will also emit when the day rolls over (count → 0).
+        // Load persisted counts from Room on startup
         scope.launch {
-            counterDataStore.todayCount.collect { persistedCount ->
-                _todayCount.value = persistedCount
+            val today = LocalDate.now().toString()
+            val counts = dailyCountDao.getCountsByDate(today)
+            val map = counts.associate { it.packageName to it.count }
+            _todayCounts.value = map
+        }
+    }
+
+    /**
+     * Increment the count by 1 for a specific package.
+     */
+    fun increment(packageName: String) {
+        val today = LocalDate.now().toString()
+        
+        // Optimistic update
+        val currentCounts = _todayCounts.value.toMutableMap()
+        val currentCount = currentCounts[packageName] ?: 0
+        val newCount = currentCount + 1
+        currentCounts[packageName] = newCount
+        _todayCounts.value = currentCounts
+
+        // Persist
+        scope.launch {
+            dailyCountDao.insert(DailyCount(date = today, packageName = packageName, count = newCount))
+        }
+    }
+
+    /**
+     * Reset today's count for all apps.
+     */
+    fun resetTodayAll() {
+        val today = LocalDate.now().toString()
+        _todayCounts.value = emptyMap()
+        scope.launch {
+            AppTrackerConfig.SUPPORTED_APPS.forEach { app ->
+                dailyCountDao.insert(DailyCount(date = today, packageName = app.packageName, count = 0))
             }
         }
     }
 
     /**
-     * Increment the count by 1.
-     * Updates the in-memory StateFlow immediately (optimistic) for snappy UI,
-     * then persists to DataStore in the background.
+     * Reset today's count for a specific app.
      */
-    fun increment() {
-        _todayCount.value++
+    fun resetToday(packageName: String) {
+        val today = LocalDate.now().toString()
+        val currentCounts = _todayCounts.value.toMutableMap()
+        currentCounts[packageName] = 0
+        _todayCounts.value = currentCounts
+        
         scope.launch {
-            counterDataStore.incrementCount()
+            dailyCountDao.insert(DailyCount(date = today, packageName = packageName, count = 0))
         }
     }
 
     /**
-     * Reset today's count to 0 (manual reset from Settings).
+     * Update whether an app is currently active in the foreground.
      */
-    fun resetToday() {
-        _todayCount.value = 0
-        scope.launch {
-            counterDataStore.resetTodayCount()
-        }
+    fun setAppActive(packageName: String, isActive: Boolean) {
+        val currentActive = _isTrackingActive.value.toMutableMap()
+        currentActive[packageName] = isActive
+        _isTrackingActive.value = currentActive
     }
 
-    /**
-     * Update whether Instagram is currently the active foreground app.
-     */
-    fun setInstagramActive(isActive: Boolean) {
-        _isInstagramActive.value = isActive
-    }
-
-    /**
-     * Set count to a specific value.
-     */
-    fun setCount(count: Int) {
-        _todayCount.value = count
-        scope.launch {
-            counterDataStore.setCount(count)
-        }
-    }
-
-    /**
-     * History flows from Room.
-     */
     fun getAllHistory(): Flow<List<DailyCount>> {
         return dailyCountDao.getAllHistory()
     }
 
-    fun getLast7Days(): Flow<List<DailyCount>> {
-        return dailyCountDao.getLast7Days()
+    fun getLast7DaysCombined(): Flow<List<DailyCountAggregated>> {
+        return dailyCountDao.getLast7DaysCombined()
+    }
+
+    fun getLast7DaysForPackage(packageName: String): Flow<List<DailyCount>> {
+        return dailyCountDao.getLast7DaysForPackage(packageName)
     }
 }
