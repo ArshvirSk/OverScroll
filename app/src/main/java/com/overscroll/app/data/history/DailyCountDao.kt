@@ -16,6 +16,17 @@ interface DailyCountDao {
 
     @Query("SELECT * FROM daily_counts WHERE packageName = :packageName ORDER BY date DESC LIMIT 7")
     fun getLast7DaysForPackage(packageName: String): Flow<List<DailyCount>>
+    @Query("SELECT date, SUM(count) as totalCount FROM daily_counts GROUP BY date ORDER BY date DESC LIMIT 30")
+    fun getLast30DaysCombined(): Flow<List<DailyCountAggregated>>
+
+    @Query("SELECT * FROM daily_counts WHERE packageName = :packageName ORDER BY date DESC LIMIT 30")
+    fun getLast30DaysForPackage(packageName: String): Flow<List<DailyCount>>
+
+    @Query("SELECT strftime('%Y-%m', date) as period, SUM(count) as totalCount FROM daily_counts GROUP BY period ORDER BY period DESC LIMIT 12")
+    fun getLast12MonthsCombined(): Flow<List<MonthlyCountAggregated>>
+
+    @Query("SELECT strftime('%Y-%m', date) as period, SUM(count) as totalCount FROM daily_counts WHERE packageName = :packageName GROUP BY period ORDER BY period DESC LIMIT 12")
+    fun getLast12MonthsForPackage(packageName: String): Flow<List<MonthlyCountAggregated>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(dailyCount: DailyCount)
@@ -35,5 +46,10 @@ interface DailyCountDao {
 
 data class DailyCountAggregated(
     val date: String,
+    val totalCount: Int
+)
+
+data class MonthlyCountAggregated(
+    val period: String, // format YYYY-MM
     val totalCount: Int
 )

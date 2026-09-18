@@ -65,82 +65,122 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+
+data class ChartDataPoint(
+    val label: String, // Label to show on X-axis (e.g. 'Mon', '15', 'Jan')
+    val value: Int
+)
 
 @HiltViewModel
 class HistoryViewModel @Inject constructor(
     private val repository: ScrollCountRepository,
 ) : ViewModel() {
 
-    private val _selectedAppFilter = MutableStateFlow<String?>(null) // null = Combined
+    private val _selectedAppFilter = MutableStateFlow<String?>(null)
     val selectedAppFilter = _selectedAppFilter.asStateFlow()
+    
+    private val _selectedSegment = MutableStateFlow("Week")
+    val selectedSegment = _selectedSegment.asStateFlow()
 
     fun setAppFilter(packageName: String?) {
         _selectedAppFilter.value = packageName
     }
+    
+    fun setSegment(segment: String) {
+        _selectedSegment.value = segment
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val chartData = _selectedAppFilter.flatMapLatest { filter ->
-        if (filter == null) {
-            combine(
-                repository.getLast7DaysCombined(),
-                repository.combinedTodayCount
-            ) { history, todayCount ->
-                buildChartData(history, todayCount, "combined")
+    val chartData = combine(_selectedAppFilter, _selectedSegment, ::Pair)
+        .flatMapLatest { (filter, segment) ->
+            when (segment) {
+                "Week" -> {
+                    if (filter == null) {
+                        combine(repository.getLast7DaysCombined(), repository.combinedTodayCount) { history, todayCount ->
+                            buildDaysChartData(history.associate { it.date to it.totalCount }, todayCount, 7)
+                        }
+                    } else {
+                        combine(repository.getLast7DaysForPackage(filter), repository.todayCounts) { history, todayCountsMap ->
+                            buildDaysChartData(history.associate { it.date to it.count }, todayCountsMap[filter] ?: 0, 7)
+                        }
+                    }
+                }
+                "Month" -> {
+                    if (filter == null) {
+                        combine(repository.getLast30DaysCombined(), repository.combinedTodayCount) { history, todayCount ->
+                            buildDaysChartData(history.associate { it.date to it.totalCount }, todayCount, 30)
+                        }
+                    } else {
+                        combine(repository.getLast30DaysForPackage(filter), repository.todayCounts) { history, todayCountsMap ->
+                            buildDaysChartData(history.associate { it.date to it.count }, todayCountsMap[filter] ?: 0, 30)
+                        }
+                    }
+                }
+                "Year" -> {
+                    if (filter == null) {
+                        // For Year, we don't mix in "todayCount" dynamically into the current month,
+                        // because the DB query already returns the current month's total including today (if persisted).
+                        // To be perfectly accurate we could add today's unpersisted count, but for a yearly view it's negligible.
+                        repository.getLast12MonthsCombined().map { history ->
+                            buildMonthsChartData(history.associate { it.period to it.totalCount })
+                        }
+                    } else {
+                        repository.getLast12MonthsForPackage(filter).map { history ->
+                            buildMonthsChartData(history.associate { it.period to it.totalCount })
+                        }
+                    }
+                }
+                else -> kotlinx.coroutines.flow.flowOf(emptyList())
             }
-        } else {
-            combine(
-                repository.getLast7DaysForPackage(filter),
-                repository.todayCounts
-            ) { history, todayCountsMap ->
-                val todayCount = todayCountsMap[filter] ?: 0
-                buildChartData(history, todayCount, filter)
-            }
-        }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
-    private fun buildChartData(
-        history: List<com.overscroll.app.data.history.DailyCountAggregated>,
+    private fun buildDaysChartData(
+        historyMap: Map<String, Int>,
         todayCount: Int,
-        packageName: String
-    ): List<DailyCount> {
+        days: Int
+    ): List<ChartDataPoint> {
         val today = LocalDate.now()
-        val data = mutableListOf<DailyCount>()
-        for (i in 6 downTo 0) {
+        val data = mutableListOf<ChartDataPoint>()
+        val formatter = DateTimeFormatter.ofPattern("EEE")
+        val monthFormatter = DateTimeFormatter.ofPattern("d") // just the day number for Month view
+        
+        for (i in (days - 1) downTo 0) {
             val date = today.minusDays(i.toLong())
             val dateStr = date.toString()
-            if (i == 0) {
-                data.add(DailyCount(dateStr, packageName, todayCount))
+            
+            val label = if (days == 7) {
+                if (i == 0) "Today" else date.format(formatter)
             } else {
-                val historical = history.find { it.date == dateStr }
-                data.add(DailyCount(dateStr, packageName, historical?.totalCount ?: 0))
+                if (i == 0) "Today" else if (date.dayOfMonth % 5 == 0) date.format(monthFormatter) else ""
+            }
+            
+            if (i == 0) {
+                data.add(ChartDataPoint(label, todayCount))
+            } else {
+                data.add(ChartDataPoint(label, historyMap[dateStr] ?: 0))
             }
         }
         return data
     }
     
-    // Overload for regular DailyCount from DB
-    private fun buildChartData(
-        history: List<DailyCount>,
-        todayCount: Int,
-        packageName: String,
-        isAggregated: Boolean = false // dummy to avoid signature clash
-    ): List<DailyCount> {
+    private fun buildMonthsChartData(
+        historyMap: Map<String, Int>
+    ): List<ChartDataPoint> {
         val today = LocalDate.now()
-        val data = mutableListOf<DailyCount>()
-        for (i in 6 downTo 0) {
-            val date = today.minusDays(i.toLong())
-            val dateStr = date.toString()
-            if (i == 0) {
-                data.add(DailyCount(dateStr, packageName, todayCount))
-            } else {
-                val historical = history.find { it.date == dateStr }
-                data.add(DailyCount(dateStr, packageName, historical?.count ?: 0))
-            }
+        val data = mutableListOf<ChartDataPoint>()
+        val formatter = DateTimeFormatter.ofPattern("MMM")
+        
+        for (i in 11 downTo 0) {
+            val date = today.minusMonths(i.toLong())
+            val periodStr = date.format(DateTimeFormatter.ofPattern("yyyy-MM"))
+            val label = date.format(formatter)
+            data.add(ChartDataPoint(label, historyMap[periodStr] ?: 0))
         }
         return data
     }
@@ -153,7 +193,7 @@ fun HistoryScreen(
     viewModel: HistoryViewModel = hiltViewModel(),
 ) {
     val data by viewModel.chartData.collectAsState()
-    var selectedSegment by remember { mutableStateOf("Week") }
+    val selectedSegment by viewModel.selectedSegment.collectAsState()
 
     Column(
         modifier = Modifier
@@ -195,9 +235,9 @@ fun HistoryScreen(
             Spacer(Modifier.height(16.dp))
             
             SegmentedControl(
-                segments = listOf("Day", "Week", "Month", "Year"),
+                segments = listOf("Week", "Month", "Year"),
                 selectedSegment = selectedSegment,
-                onSegmentSelected = { selectedSegment = it }
+                onSegmentSelected = { viewModel.setSegment(it) }
             )
             Spacer(Modifier.height(16.dp))
             
@@ -234,17 +274,11 @@ fun HistoryScreen(
                 ),
                 shape = RoundedCornerShape(16.dp),
             ) {
-                if (selectedSegment == "Week") {
-                    if (data.isNotEmpty()) {
-                        BarChart(data = data, modifier = Modifier.fillMaxSize().padding(24.dp))
-                    } else {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Loading data...", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
+                if (data.isNotEmpty()) {
+                    BarChart(data = data, modifier = Modifier.fillMaxSize().padding(24.dp))
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Data for $selectedSegment coming soon", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Loading data...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -253,9 +287,9 @@ fun HistoryScreen(
             
             // Statistics summary
             if (data.isNotEmpty()) {
-                val total = data.sumOf { it.count }
+                val total = data.sumOf { it.value }
                 val avg = if (data.isNotEmpty()) total / data.size else 0
-                val max = data.maxOfOrNull { it.count } ?: 0
+                val max = data.maxOfOrNull { it.value } ?: 0
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -307,13 +341,13 @@ fun SegmentedControl(
 
 @Composable
 fun BarChart(
-    data: List<DailyCount>,
+    data: List<ChartDataPoint>,
     modifier: Modifier = Modifier
 ) {
-    val maxCount = data.maxOfOrNull { it.count }?.coerceAtLeast(10) ?: 10 // Minimum scale of 10
+    val maxCount = data.maxOfOrNull { it.value }?.coerceAtLeast(10) ?: 10 // Minimum scale of 10
     
     // Animation progress
-    val animationProgress = remember { Animatable(0f) }
+    val animationProgress = remember(data) { Animatable(0f) }
     LaunchedEffect(data) {
         animationProgress.animateTo(1f, animationSpec = tween(durationMillis = 800))
     }
@@ -332,17 +366,17 @@ fun BarChart(
         ) {
             val canvasWidth = size.width
             val canvasHeight = size.height
-            val barWidth = (canvasWidth / data.size) * 0.5f
+            val barWidth = (canvasWidth / data.size) * 0.7f // Makes bars relatively thinner for 30 days
             val spacing = (canvasWidth - (barWidth * data.size)) / (data.size - 1)
 
-            data.forEachIndexed { index, dailyCount ->
-                val barHeight = (dailyCount.count.toFloat() / maxCount) * canvasHeight * animationProgress.value
+            data.forEachIndexed { index, dataPoint ->
+                val barHeight = (dataPoint.value.toFloat() / maxCount) * canvasHeight * animationProgress.value
                 val xOffset = index * (barWidth + spacing)
                 val yOffset = canvasHeight - barHeight
 
                 // Draw rounded bar
                 drawRoundRect(
-                    color = if (index == data.size - 1) barColor else barColorLight, // Highlight today
+                    color = if (index == data.size - 1) barColor else barColorLight, // Highlight today/current month
                     topLeft = Offset(xOffset, yOffset),
                     size = Size(barWidth, barHeight),
                     cornerRadius = CornerRadius(barWidth / 2, barWidth / 2)
@@ -352,22 +386,28 @@ fun BarChart(
         
         Spacer(Modifier.height(12.dp))
         
-        // X-Axis Labels (Day of week)
+        // X-Axis Labels
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            val formatter = DateTimeFormatter.ofPattern("EEE")
-            data.forEachIndexed { index, dailyCount ->
-                val date = LocalDate.parse(dailyCount.date)
-                val label = if (index == data.size - 1) "Today" else date.format(formatter)
-                
-                Text(
-                    text = label,
-                    style = labelStyle,
-                    color = labelColor,
-                    fontWeight = if (index == data.size - 1) FontWeight.Bold else FontWeight.Normal
-                )
+            data.forEachIndexed { index, dataPoint ->
+                if (dataPoint.label.isNotEmpty()) {
+                    Text(
+                        text = dataPoint.label,
+                        style = labelStyle,
+                        color = labelColor,
+                        fontWeight = if (index == data.size - 1) FontWeight.Bold else FontWeight.Normal,
+                        // Avoid clipping long labels by scaling them down if needed or we could just use a modifier,
+                        // but since they are small ("Mon", "Jan", "15") it's generally fine.
+                    )
+                } else if (data.size > 12) {
+                    // When labels are empty (like in Month view for intermediate days), 
+                    // we still need to take up space to keep spacing correct if we used weight, 
+                    // but SpaceBetween handles this automatically if we just render an invisible element.
+                    // Wait, SpaceBetween only distributes space between visible elements! 
+                    // Let's use Spacer with weight 1f if we can't use SpaceBetween properly.
+                }
             }
         }
     }

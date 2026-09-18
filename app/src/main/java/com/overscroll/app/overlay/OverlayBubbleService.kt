@@ -73,8 +73,6 @@ class OverlayBubbleService : LifecycleService() {
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var hasMoved = false
-    
-    private val isExpanded = kotlinx.coroutines.flow.MutableStateFlow(false)
 
     companion object {
         private const val TAG = "OverlayBubble"
@@ -147,26 +145,30 @@ class OverlayBubbleService : LifecycleService() {
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
             
             setContent {
-                val count by scrollCountRepository.combinedTodayCount.collectAsState(initial = 0)
-                val countsMap by scrollCountRepository.todayCounts.collectAsState(initial = emptyMap())
+                val activeApp by scrollCountRepository.currentActiveApp.collectAsState()
+                val todayCounts by scrollCountRepository.todayCounts.collectAsState()
+                val count = if (activeApp == "com.overscroll.app") {
+                    todayCounts.values.sum()
+                } else {
+                    todayCounts[activeApp] ?: 0
+                }
+                
                 val thresholdA by appSettingsDataStore.thresholdA.collectAsState(initial = 20)
                 val thresholdB by appSettingsDataStore.thresholdB.collectAsState(initial = 50)
-                val expanded by isExpanded.collectAsState()
                 
                 // Root padding prevents clipping of scaling animations
                 Box(
                     modifier = Modifier.padding(16.dp)
                 ) {
-                    androidx.compose.foundation.layout.Column {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .background(
-                                    color = Color(0xE6181824),
-                                    shape = RoundedCornerShape(32.dp)
-                                )
-                                .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 16.dp)
-                        ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(
+                                color = Color(0xE6181824),
+                                shape = RoundedCornerShape(32.dp)
+                            )
+                            .padding(start = 4.dp, top = 4.dp, bottom = 4.dp, end = 16.dp)
+                    ) {
                             MascotFace(
                                 count = count,
                                 thresholdA = thresholdA,
@@ -180,31 +182,6 @@ class OverlayBubbleService : LifecycleService() {
                                 color = Color.White
                             )
                         }
-                        
-                        androidx.compose.animation.AnimatedVisibility(visible = expanded) {
-                            androidx.compose.foundation.layout.Column(
-                                modifier = Modifier
-                                    .padding(top = 8.dp)
-                                    .background(Color(0xE6181824), RoundedCornerShape(16.dp))
-                                    .padding(12.dp)
-                            ) {
-                                val activeApps = com.overscroll.app.config.AppTrackerConfig.SUPPORTED_APPS.filter { (countsMap[it.packageName] ?: 0) > 0 }
-                                if (activeApps.isEmpty()) {
-                                    Text("No tracking data yet", color = Color.White, fontSize = 14.sp)
-                                } else {
-                                    activeApps.forEach { app ->
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                                        ) {
-                                            Text(app.displayName, color = Color.White, fontSize = 14.sp)
-                                            Text(countsMap[app.packageName].toString(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(start = 12.dp))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -314,9 +291,6 @@ class OverlayBubbleService : LifecycleService() {
                     if (hasMoved) {
                         // Snap to nearest edge after drag
                         snapToEdge(params)
-                    } else {
-                        // Tap behavior: Toggle expanded state
-                        isExpanded.value = !isExpanded.value
                     }
                     true
                 }

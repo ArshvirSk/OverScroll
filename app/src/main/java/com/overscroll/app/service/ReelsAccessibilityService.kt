@@ -25,6 +25,9 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     /** Whether we believe the user is currently in the short-form feed per package */
     private val isInFeedViewer = mutableMapOf<String, Boolean>()
+    
+    /** Timestamp of when we last entered the feed per package */
+    private val windowEnterTimestamps = mutableMapOf<String, Long>()
 
     /** Set of resource IDs we've seen but didn't match — logged for ID discovery */
     private val unknownScrollSources = mutableMapOf<String, MutableSet<String>>()
@@ -97,17 +100,15 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         
-        val packageName = event.packageName?.toString() ?: ""
-        
-        // Robustly track whether a tracked app (or our app) is active
-        if (packageName.isNotEmpty() && !packageName.startsWith("com.android.systemui") && !packageName.contains("inputmethod")) {
-            val isTrackedActive = trackedPackages.contains(packageName) || packageName == "com.overscroll.app"
-            // For v2 we just set the primary active state. We'll use the last known package if needed.
-            repository.setAppActive(packageName, isTrackedActive)
+        // Use rootInActiveWindow to get the TRUE foreground app, ignoring background events
+        val activeWindowPackage = rootInActiveWindow?.packageName?.toString()
+        if (activeWindowPackage != null && !activeWindowPackage.startsWith("com.android.systemui") && !activeWindowPackage.contains("inputmethod")) {
+            repository.setAppActive(activeWindowPackage)
         }
 
-        if (!trackedPackages.contains(packageName)) return
-        val trackedApp = AppTrackerConfig.getAppByPackage(packageName) ?: return
+        val eventPackageName = event.packageName?.toString() ?: ""
+        if (!trackedPackages.contains(eventPackageName)) return
+        val trackedApp = AppTrackerConfig.getAppByPackage(eventPackageName) ?: return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -136,6 +137,7 @@ class ReelsAccessibilityService : AccessibilityService() {
 
         if (nowInFeed != wasInFeed) {
             if (nowInFeed) {
+                windowEnterTimestamps[trackedApp.packageName] = System.currentTimeMillis()
                 Log.i(TAG, "📱 Entered ${trackedApp.displayName} viewer (class: $className)")
             } else {
                 Log.i(TAG, "📱 Left ${trackedApp.displayName} viewer (class: $className)")
@@ -155,9 +157,10 @@ class ReelsAccessibilityService : AccessibilityService() {
 
             // Check if this scroll is from the known feed container
             val isFeedScroll = if (trackedApp.feedResourceIds.isEmpty()) {
-                // Fallback: accept if it's a known scrollable class
-                val scrollClassName = event.className?.toString() ?: ""
-                scrollClassName.contains("RecyclerView", ignoreCase = true) || scrollClassName.contains("ViewPager", ignoreCase = true)
+                // Since the user wants to track both reels AND normal feed scrolling,
+                // and modern apps use various unknown classes (Compose, custom views),
+                // we accept any valid scroll event here if we don't have hardcoded IDs.
+                true
             } else {
                 trackedApp.feedResourceIds.contains(resourceId)
             }
@@ -177,6 +180,13 @@ class ReelsAccessibilityService : AccessibilityService() {
 
             if (elapsed < AppTrackerConfig.SCROLL_DEBOUNCE_MS) {
                 Log.v(TAG, "${trackedApp.displayName}: Scroll debounced (${elapsed}ms < ${AppTrackerConfig.SCROLL_DEBOUNCE_MS}ms)")
+                return
+            }
+
+            // Ignore programmatic scrolls that often happen right when the app/window opens
+            val enterTime = windowEnterTimestamps[trackedApp.packageName] ?: 0L
+            if (now - enterTime < 1000L) {
+                Log.v(TAG, "${trackedApp.displayName}: Ignoring scroll immediately after window enter (programmatic)")
                 return
             }
 

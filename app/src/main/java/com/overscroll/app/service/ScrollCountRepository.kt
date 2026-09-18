@@ -30,11 +30,15 @@ class ScrollCountRepository @Inject constructor(
     // Combined total count for today across all apps
     val combinedTodayCount: Flow<Int> = _todayCounts.map { map -> map.values.sum() }
 
-    private val _isTrackingActive = MutableStateFlow<Map<String, Boolean>>(emptyMap())
-    val isTrackingActive: StateFlow<Map<String, Boolean>> = _isTrackingActive.asStateFlow()
+    private val _currentActiveApp = MutableStateFlow<String?>(null)
+    val currentActiveApp = _currentActiveApp.asStateFlow()
+    
+    // Is any tracked app (or our own app) currently active in the foreground
+    val isAnyAppActive: Flow<Boolean> = _currentActiveApp.map { packageName -> 
+        packageName == "com.overscroll.app" || AppTrackerConfig.getAppByPackage(packageName ?: "") != null 
+    }
 
-    // Is any tracked app currently active in the foreground
-    val isAnyAppActive: Flow<Boolean> = _isTrackingActive.map { map -> map.values.any { it } }
+    private val initDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     init {
         // Load persisted counts from Room on startup
@@ -43,6 +47,7 @@ class ScrollCountRepository @Inject constructor(
             val counts = dailyCountDao.getCountsByDate(today)
             val map = counts.associate { it.packageName to it.count }
             _todayCounts.value = map
+            initDeferred.complete(Unit)
         }
     }
 
@@ -52,15 +57,16 @@ class ScrollCountRepository @Inject constructor(
     fun increment(packageName: String) {
         val today = LocalDate.now().toString()
         
-        // Optimistic update
-        val currentCounts = _todayCounts.value.toMutableMap()
-        val currentCount = currentCounts[packageName] ?: 0
-        val newCount = currentCount + 1
-        currentCounts[packageName] = newCount
-        _todayCounts.value = currentCounts
-
-        // Persist
         scope.launch {
+            initDeferred.await()
+            // Optimistic update
+            val currentCounts = _todayCounts.value.toMutableMap()
+            val currentCount = currentCounts[packageName] ?: 0
+            val newCount = currentCount + 1
+            currentCounts[packageName] = newCount
+            _todayCounts.value = currentCounts
+
+            // Persist
             dailyCountDao.insert(DailyCount(date = today, packageName = packageName, count = newCount))
         }
     }
@@ -93,12 +99,10 @@ class ScrollCountRepository @Inject constructor(
     }
 
     /**
-     * Update whether an app is currently active in the foreground.
+     * Mark an app as currently active in the foreground.
      */
-    fun setAppActive(packageName: String, isActive: Boolean) {
-        val currentActive = _isTrackingActive.value.toMutableMap()
-        currentActive[packageName] = isActive
-        _isTrackingActive.value = currentActive
+    fun setAppActive(packageName: String) {
+        _currentActiveApp.value = packageName
     }
 
     fun getAllHistory(): Flow<List<DailyCount>> {
@@ -111,5 +115,21 @@ class ScrollCountRepository @Inject constructor(
 
     fun getLast7DaysForPackage(packageName: String): Flow<List<DailyCount>> {
         return dailyCountDao.getLast7DaysForPackage(packageName)
+    }
+
+    fun getLast30DaysCombined(): Flow<List<DailyCountAggregated>> {
+        return dailyCountDao.getLast30DaysCombined()
+    }
+
+    fun getLast30DaysForPackage(packageName: String): Flow<List<DailyCount>> {
+        return dailyCountDao.getLast30DaysForPackage(packageName)
+    }
+
+    fun getLast12MonthsCombined(): Flow<List<com.overscroll.app.data.history.MonthlyCountAggregated>> {
+        return dailyCountDao.getLast12MonthsCombined()
+    }
+
+    fun getLast12MonthsForPackage(packageName: String): Flow<List<com.overscroll.app.data.history.MonthlyCountAggregated>> {
+        return dailyCountDao.getLast12MonthsForPackage(packageName)
     }
 }
