@@ -7,6 +7,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.overscroll.app.config.AppTrackerConfig
 import com.overscroll.app.config.TrackedApp
+import com.overscroll.app.overlay.OverlayNudgeService
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -162,8 +163,22 @@ class ReelsAccessibilityService : AccessibilityService() {
                 val isKnownList = scrollClassName.contains("RecyclerView", ignoreCase = true) || 
                                   scrollClassName.contains("ViewPager", ignoreCase = true) ||
                                   scrollClassName.contains("ListView", ignoreCase = true)
-                // A valid feed is usually a known list class or a component with multiple items
-                isKnownList || (event.itemCount > 0)
+                
+                var isFullScreen = false
+                sourceNode?.let { node ->
+                    val rect = android.graphics.Rect()
+                    node.getBoundsInScreen(rect)
+                    val displayMetrics = resources.displayMetrics
+                    val screenHeight = displayMetrics.heightPixels
+                    val screenWidth = displayMetrics.widthPixels
+                    
+                    // Ensure the scrolling view takes up at least 80% of the screen height and 90% of the width
+                    // This filters out normal feed scrolling and only counts full-screen video swiping (Shorts, Reels, etc.)
+                    isFullScreen = rect.height() >= (screenHeight * 0.8) && rect.width() >= (screenWidth * 0.9)
+                }
+                
+                // A valid feed is usually a known list class or a component with multiple items AND it is full screen
+                (isKnownList || (event.itemCount > 0)) && isFullScreen
             } else {
                 trackedApp.feedResourceIds.contains(resourceId)
             }
@@ -192,11 +207,18 @@ class ReelsAccessibilityService : AccessibilityService() {
                 Log.v(TAG, "${trackedApp.displayName}: Ignoring scroll immediately after window enter (programmatic)")
                 return
             }
+            
+            var timeElapsedMs = 0L
+            if (lastTimestamp > 0L) {
+                if (elapsed < 5 * 60 * 1000) { // Max 5 mins between scrolls to count as active time
+                    timeElapsedMs = elapsed
+                }
+            }
 
             lastScrollTimestamps[trackedApp.packageName] = now
 
             // ── Count it! ──
-            repository.increment(trackedApp.packageName)
+            repository.increment(trackedApp.packageName, timeElapsedMs)
             // Wait for flow to emit, but we can optimistically sum the state flow
             val combinedCount = repository.todayCounts.value.values.sum() + 1 // +1 for the increment just dispatched
             Log.i(TAG, "🎬 ${trackedApp.displayName} counted! (from: $resourceId, elapsed: ${elapsed}ms)")
@@ -204,12 +226,15 @@ class ReelsAccessibilityService : AccessibilityService() {
             // ── Check Nudges (apply to combined count) ──
             if (isNudgeEnabled && !hasSnoozedToday) {
                 serviceScope.launch {
+                    val combinedTimeMs = repository.todayTimeMs.value.values.sum() + timeElapsedMs
+                    val minutes = combinedTimeMs / 60000
+                    
                     if (combinedCount >= currentThresholdA && combinedCount < currentThresholdB && !nudgedAToday) {
                         appSettings.setNudgedAToday(true)
-                        NotificationHelper.sendNudgeNotification(this@ReelsAccessibilityService, "You've scrolled $combinedCount videos today. Maybe take a quick breather?")
+                        showOverlayNudge("You've scrolled $combinedCount videos over $minutes minutes today. Time for a break?")
                     } else if (combinedCount >= currentThresholdB && !nudgedBToday) {
                         appSettings.setNudgedBToday(true)
-                        NotificationHelper.sendNudgeNotification(this@ReelsAccessibilityService, "You've hit $combinedCount videos today. Consider closing the app.")
+                        showOverlayNudge("You've hit $combinedCount videos over $minutes minutes today. Consider closing the app.")
                     }
                 }
             }
@@ -217,6 +242,13 @@ class ReelsAccessibilityService : AccessibilityService() {
         } finally {
             // Recycling is automatic on modern Android.
         }
+    }
+    
+    private fun showOverlayNudge(message: String) {
+        val intent = android.content.Intent(this, OverlayNudgeService::class.java).apply {
+            putExtra("MESSAGE", message)
+        }
+        startService(intent)
     }
 
     private fun handleContentChanged(event: AccessibilityEvent, trackedApp: TrackedApp) {

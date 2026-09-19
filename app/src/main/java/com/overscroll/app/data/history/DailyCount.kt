@@ -13,5 +13,6 @@ import androidx.room.PrimaryKey
 data class DailyCount(
     val date: String, // Format: YYYY-MM-DD (ISO-8601)
     val packageName: String,
-    val count: Int
+    val count: Int,
+    val timeSpentMs: Long = 0
 )

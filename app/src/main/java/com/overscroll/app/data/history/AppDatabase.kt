@@ -6,7 +6,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [DailyCount::class], version = 2, exportSchema = false)
+@Database(entities = [DailyCount::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dailyCountDao(): DailyCountDao
 
@@ -30,6 +30,12 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL("DROP TABLE daily_counts")
                 // Change the table name to the correct one
                 database.execSQL("ALTER TABLE daily_counts_new RENAME TO daily_counts")
+            }
+        }
+        
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE daily_counts ADD COLUMN timeSpentMs INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

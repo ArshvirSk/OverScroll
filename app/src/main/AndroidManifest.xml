@@ -63,6 +63,10 @@
                 android:value="Floating overlay bubble showing live Reels scroll count" />
         </service>
 
+        <service
+            android:name=".overlay.OverlayNudgeService"
+            android:exported="false" />
+
         <!-- Counter Foreground Service (PRD §5.4) -->
         <service
             android:name=".service.CounterForegroundService"

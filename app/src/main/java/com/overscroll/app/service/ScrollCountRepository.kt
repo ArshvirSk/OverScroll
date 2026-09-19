@@ -23,12 +23,18 @@ class ScrollCountRepository @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // In-memory snapshot of today's counts per package for instant UI updates
     private val _todayCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
     val todayCounts: StateFlow<Map<String, Int>> = _todayCounts.asStateFlow()
 
+    // In-memory snapshot of today's time spent per package
+    private val _todayTimeMs = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val todayTimeMs: StateFlow<Map<String, Long>> = _todayTimeMs.asStateFlow()
+
     // Combined total count for today across all apps
     val combinedTodayCount: Flow<Int> = _todayCounts.map { map -> map.values.sum() }
+    
+    // Combined total time for today across all apps
+    val combinedTodayTimeMs: Flow<Long> = _todayTimeMs.map { map -> map.values.sum() }
 
     private val _currentActiveApp = MutableStateFlow<String?>(null)
     val currentActiveApp = _currentActiveApp.asStateFlow()
@@ -39,6 +45,7 @@ class ScrollCountRepository @Inject constructor(
     }
 
     private val initDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
+    private var currentDateString: String = LocalDate.now().toString()
 
     init {
         // Load persisted counts from Room on startup
@@ -46,28 +53,53 @@ class ScrollCountRepository @Inject constructor(
             val today = LocalDate.now().toString()
             val counts = dailyCountDao.getCountsByDate(today)
             val map = counts.associate { it.packageName to it.count }
+            val timeMap = counts.associate { it.packageName to it.timeSpentMs }
             _todayCounts.value = map
+            _todayTimeMs.value = timeMap
+            currentDateString = today
             initDeferred.complete(Unit)
         }
     }
 
     /**
-     * Increment the count by 1 for a specific package.
+     * Checks if the date has changed since we last loaded/incremented counts.
+     * If it has, clears the in-memory cache to start the new day fresh.
      */
-    fun increment(packageName: String) {
+    fun checkRollover() {
         val today = LocalDate.now().toString()
-        
+        if (today != currentDateString) {
+            _todayCounts.value = emptyMap()
+            _todayTimeMs.value = emptyMap()
+            currentDateString = today
+        }
+    }
+
+    /**
+     * Increment the count by 1 for a specific package, and optionally add time spent.
+     */
+    fun increment(packageName: String, timeElapsedMs: Long = 0) {
         scope.launch {
             initDeferred.await()
-            // Optimistic update
+            checkRollover() // Ensure we don't carry yesterday's counts forward
+            
+            val today = currentDateString
+            
+            // Optimistic update for count
             val currentCounts = _todayCounts.value.toMutableMap()
             val currentCount = currentCounts[packageName] ?: 0
             val newCount = currentCount + 1
             currentCounts[packageName] = newCount
             _todayCounts.value = currentCounts
+            
+            // Optimistic update for time
+            val currentTimes = _todayTimeMs.value.toMutableMap()
+            val currentTime = currentTimes[packageName] ?: 0L
+            val newTime = currentTime + timeElapsedMs
+            currentTimes[packageName] = newTime
+            _todayTimeMs.value = currentTimes
 
             // Persist
-            dailyCountDao.insert(DailyCount(date = today, packageName = packageName, count = newCount))
+            dailyCountDao.insert(DailyCount(date = today, packageName = packageName, count = newCount, timeSpentMs = newTime))
         }
     }
 

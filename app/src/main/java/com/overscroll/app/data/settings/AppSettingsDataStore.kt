@@ -54,11 +54,11 @@ class AppSettingsDataStore @Inject constructor(
     }
 
     val thresholdA: Flow<Int> = context.appSettingsDataStore.data.map { prefs ->
-        prefs[KEY_THRESHOLD_A] ?: 20
+        prefs[KEY_THRESHOLD_A] ?: 500
     }
 
     val thresholdB: Flow<Int> = context.appSettingsDataStore.data.map { prefs ->
-        prefs[KEY_THRESHOLD_B] ?: 50
+        prefs[KEY_THRESHOLD_B] ?: 1000
     }
 
     val nudgeEnabled: Flow<Boolean> = context.appSettingsDataStore.data.map { prefs ->
